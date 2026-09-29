@@ -131,6 +131,13 @@ unrelated systems provide it is the evidence that it is the shape of the thing
 rather than the shape of one kernel — and version 0.2, which built the primitive
 out of a mutex and a condition variable, had this backwards.
 
+## Part of a region published (0.13.0)
+
+openkal 0.15's `kal_exec_publish_part` is `mprotect` on the part, in the page
+this system protects in (`kal_exec_granularity`, the same page the rest of
+`exec.cpp` rounds to: 16 KiB on arm64). Cross-built from Linux; not yet run on
+the system.
+
 ## Conformance
 
 The suite lives in the specification package and is the same suite every

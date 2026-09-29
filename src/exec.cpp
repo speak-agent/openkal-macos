@@ -176,6 +176,24 @@ void kal_exec_free(void* p, kal_uintptr size) {
              static_cast<okm_long>(bytes));
 }
 
+// The partial form (openkal 0.15): the same protection call on part of the
+// mapping, in the page this system protects in --- the granularity the rest of
+// this file already works in.
+kal_uintptr kal_exec_granularity(void) {
+    return static_cast<kal_uintptr>(granularity());
+}
+
+int kal_exec_publish_part(void* p, kal_uintptr offset, kal_uintptr size) {
+    const okm_uptr page = granularity();
+    if (p == nullptr || size == 0 || offset % page != 0 || size % page != 0) return kal_err_invalid;
+    const okm_long r = okm::sys(okm::nr_mprotect,
+                                reinterpret_cast<okm_long>(static_cast<unsigned char*>(p) + offset),
+                                static_cast<okm_long>(size),
+                                okm::prot_read | okm::prot_exec);
+    if (okm::failed(r)) return okm::translate(r);
+    return kal_ok;
+}
+
 // A published region may NOT be reserved for writing again on this system, and
 // the position is withheld accordingly. Asking this kernel to make an
 // executable mapping writable is the case it refuses, which is the whole reason
