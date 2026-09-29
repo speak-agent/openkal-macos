@@ -17,6 +17,31 @@ void record(int argc, char** argv, char** envp) {
 
 }  // namespace okm
 
+extern "C" {
+// The vectors as this system keeps them for every program, set before any
+// constructor runs. Names no C library defines.
+int* _NSGetArgc(void);
+char*** _NSGetArgv(void);
+char*** _NSGetEnviron(void);
+}
+
+namespace {
+
+// THE VECTORS ARE KNOWN BEFORE EITHER ENTRANCE HAS RECORDED THEM. A C library
+// above may be brought up by the first constructor that needs it, and this
+// system runs constructors in link order: a program's own come before this
+// implementation's, and the entry point after all of them. Such a library asked
+// for the arguments while nothing had recorded them, was told there were none,
+// and kept that answer --- and a program asked to act as its own child ran as
+// itself instead, and spawned itself again. Measured in continuous integration
+// on mcpp-language-server's unit tests; examples/early-constructor of
+// openkal-musl now asks for the arguments after such a start.
+void known() {
+    if (okm::g_argv == nullptr) okm::record(*_NSGetArgc(), *_NSGetArgv(), *_NSGetEnviron());
+}
+
+}  // namespace
+
 namespace {
 
 // A PROGRAM ABOVE openkal SHALL NOT BE ENDED BY SOMETHING openkal NEVER TOLD
@@ -54,7 +79,10 @@ namespace {
 
 extern "C" {
 
-kal_uintptr kal_env_arg_count(void) { return static_cast<kal_uintptr>(okm::g_argc); }
+kal_uintptr kal_env_arg_count(void) {
+    known();
+    return static_cast<kal_uintptr>(okm::g_argc);
+}
 
 // EVERY VALUE IS COPIED INTO THE CALLER'S BUFFER. These answered with a pointer
 // into this implementation's own storage, which is meaningful only while the
@@ -69,6 +97,7 @@ kal_intptr give(const char* v, kal_uintptr n, char* out, kal_uintptr cap) {
 }  // namespace
 
 kal_intptr kal_env_arg(kal_uintptr index, char* out, kal_uintptr cap) {
+    known();
     if (index >= static_cast<kal_uintptr>(okm::g_argc)) return -kal_err_not_found;
     const char* s = okm::g_argv[index];
     return give(s, okm::length(s), out, cap);
@@ -77,6 +106,7 @@ kal_intptr kal_env_arg(kal_uintptr index, char* out, kal_uintptr cap) {
 kal_intptr kal_env_var(const char* name, kal_uintptr name_len,
                        char* out, kal_uintptr cap) {
     if (name == nullptr) return -kal_err_invalid;
+    known();
     for (char** e = okm::g_envp; e && *e; ++e) {
         const char* entry = *e;
         kal_uintptr i = 0;
@@ -91,6 +121,7 @@ kal_intptr kal_env_var(const char* name, kal_uintptr name_len,
 }
 
 kal_uintptr kal_env_var_count(void) {
+    known();
     kal_uintptr n = 0; for (char** e = okm::g_envp; e && *e; ++e) ++n; return n;
 }
 
@@ -98,6 +129,7 @@ kal_uintptr kal_env_var_count(void) {
 // operation answering both needs two buffers, two capacities and two lengths,
 // and its second half is kal_env_var written again.
 kal_intptr kal_env_var_at(kal_uintptr index, char* out, kal_uintptr cap) {
+    known();
     kal_uintptr n = 0;
     for (char** e = okm::g_envp; e && *e; ++e, ++n) {
         if (n != index) continue;

@@ -138,6 +138,17 @@ this system protects in (`kal_exec_granularity`, the same page the rest of
 `exec.cpp` rounds to: 16 KiB on arm64). Cross-built from Linux; not yet run on
 the system.
 
+## The arguments before the entry point (0.13.1)
+
+A C library above may be brought up by the first constructor that needs it, and
+this system runs constructors before the entry point, a program's own first.
+The arguments and the environment were known only once the entry point or this
+implementation's constructor had recorded them, so a library started earlier was
+told there were none. `kal_env_*` now ask the system for them
+(`_NSGetArgc`/`_NSGetArgv`/`_NSGetEnviron`, set before any constructor) when
+nothing has recorded them yet. openkal-musl's `examples/early-constructor`
+checks them after such a start.
+
 ## Conformance
 
 The suite lives in the specification package and is the same suite every
