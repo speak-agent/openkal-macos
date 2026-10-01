@@ -2,10 +2,12 @@
 # The whole of what this system supplies to a program built above openkal.
 #
 # This implementation issues the kernel's own calls, so a program above it needs
-# nothing from this system's C library except the two names below. Neither could
-# be replaced by a system call: one arranges the state a new execution context
-# needs, which on this system is not what a kernel call does, and the other
-# reads a clock the kernel does not otherwise expose.
+# nothing from this system's C library except the names below. None could be
+# replaced by a system call: one arranges the state a new execution context
+# needs, which on this system is not what a kernel call does, one reads a clock
+# the kernel does not otherwise expose, and three (0.13.1) give the argument and
+# environment vectors this system keeps for every program, which a C library
+# started by an early constructor asks for before either entrance recorded them.
 #
 # The list was not read out of the sources. Every object of a complete build was
 # given to the linker without `-undefined dynamic_lookup`, and this is what
@@ -28,10 +30,10 @@ targets:         [ arm64-macos, x86_64-macos ]
 install-name:    '/usr/lib/libSystem.B.dylib'
 current-version: 1351.0.0
 #
-# THREE NAMES, AND THE THIRD IS OF A DIFFERENT KIND.
+# SIX NAMES, AND THE LAST IS OF A DIFFERENT KIND.
 #
-# The first two are names this implementation CALLS, and the enumeration above
-# found them. `dyld_stub_binder' is not called by anything here or in any source:
+# The first five are names this implementation CALLS, and the enumeration above
+# found them (the three vectors since 0.13.1). `dyld_stub_binder' is not called by anything here or in any source:
 # it is referenced by the LINKER, for the lazy binding it emits, and it is
 # therefore a requirement of the object format rather than of this package.
 #
@@ -43,5 +45,6 @@ current-version: 1351.0.0
 exports:
   - targets:     [ arm64-macos, x86_64-macos ]
     symbols:     [ _clock_gettime_nsec_np, _pthread_create_from_mach_thread,
+                   __NSGetArgc, __NSGetArgv, __NSGetEnviron,
                    dyld_stub_binder ]
 ...

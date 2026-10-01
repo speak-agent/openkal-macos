@@ -56,7 +56,7 @@ jobs:
       # written there and this implementation as written here agree today.
       - name: The specification
         run: |
-          git clone --quiet https://github.com/mcpplibs/openkal.git .spec
+          git clone --quiet https://github.com/${{ github.repository_owner }}/openkal.git .spec
           branch='${{ github.head_ref || github.ref_name }}'
           if git -C .spec rev-parse --verify --quiet "origin/$branch" > /dev/null; then
             git -C .spec checkout --quiet "origin/$branch"
@@ -321,6 +321,10 @@ jobs:
           #   clock_gettime_nsec_np,
           #   pthread_create_from_mach_thread   the two names no C library
           #     defines, which is why they are reachable from here at all.
+          #   _NSGetArgc, _NSGetArgv,
+          #   _NSGetEnviron                     this system's own vectors for
+          #     every program (0.13.1: known before either entrance records
+          #     them); likewise names no C library defines.
           #   __libc_start_main, main, _main    the hand-over, undefined here by
           #     construction.
           #   kal_*                             the interface itself.
@@ -340,7 +344,7 @@ jobs:
           #   ___dso_handle                     likewise the format's: emitted
           #     beside the weak references above, defined by the image's own
           #     start files.
-          permitted='^_?(memcpy|memmove|memset|memcmp|bzero|clock_gettime_nsec_np|pthread_create_from_mach_thread|pthread_create|pthread_join|__libc_start_main|main|kal_[a-z_]+|__stack_chk_guard|__stack_chk_fail|GCC_except_table.*|_ZN3okm.*|__Unwind_Resume|__dso_handle|section\$(start|end)\$__TEXT\$__(eh_frame|unwind_info))$'
+          permitted='^_?(memcpy|memmove|memset|memcmp|bzero|clock_gettime_nsec_np|pthread_create_from_mach_thread|_NSGetArgc|_NSGetArgv|_NSGetEnviron|pthread_create|pthread_join|__libc_start_main|main|kal_[a-z_]+|__stack_chk_guard|__stack_chk_fail|GCC_except_table.*|_ZN3okm.*|__Unwind_Resume|__dso_handle|section\$(start|end)\$__TEXT\$__(eh_frame|unwind_info))$'
           # Reported with the object that references it. A symbol without the
           # object it came from names a fault and not a place, and the first
           # time this check fired the answer was in the object rather than in
