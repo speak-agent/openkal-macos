@@ -44,6 +44,19 @@ void worker(void* arg) {
     kal_uintptr woken = 0;
     kal_task_wake(const_cast<const __UINT32_TYPE__*>(&g_word), 1, &woken);
 }
+
+// 4 MiB of frames: 256 calls each holding 16 KiB written at both ends, kept
+// alive by the read after each call. Clang recurses this deeply on a thread it
+// asked 8 MiB for; the thread library's own default is 512 KiB.
+int deep(int n) {
+    volatile unsigned char frame[16384];
+    frame[0] = static_cast<unsigned char>(n);
+    frame[sizeof frame - 1] = 1;
+    if (n == 0) return frame[sizeof frame - 1];
+    return deep(n - 1) + frame[sizeof frame - 1];
+}
+
+void deep_worker(void* arg) { *static_cast<int*>(arg) = deep(255); }
 }
 
 int main() {
@@ -262,6 +275,11 @@ int main() {
                       1000ull * 1000 * 1000);
     }
     check(kal_task_join(t) == kal_ok, "the context is joined");
+
+    int depth = 0;
+    kal_task d{};
+    check(kal_task_start(deep_worker, &depth, &d) == kal_ok && kal_task_join(d) == kal_ok && depth == 256,
+          "a started context holds 4 MiB of frames");
     check(g_ran == 1 && written == 42, "the context ran and observed shared memory");
 
     // A wait whose expected value does not match returns rather than suspending,

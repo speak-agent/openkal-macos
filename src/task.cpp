@@ -55,8 +55,68 @@ int pthread_create_from_mach_thread(void** thread, const void* attr,
 int pthread_create(void** thread, const void* attr,
                    void* (*start)(void*), void* arg);
 int pthread_join(void* thread, void** value);
+int pthread_attr_init(void* attr);
+int pthread_attr_setstacksize(void* attr, unsigned long size);
+int pthread_attr_destroy(void* attr);
 #endif
 }
+
+// EIGHT MEBIBYTES, AS A PROCESS'S FIRST CONTEXT HAS.
+//
+// The thread library gives a thread it is not told otherwise 512 KiB. A program
+// above recurses on any context as deeply as on the first, and one that sizes
+// its own threads cannot say so here (the size is a property, not a parameter):
+// Clang asks for 8 MiB and instantiates templates accordingly, and mcppls, which
+// runs Clang on contexts of this implementation, ran off the end of 512 KiB in
+// Sema::DeduceTemplateArguments.
+//
+// Standalone, the size cannot be asked of the thread library: its attribute
+// names are among those a program above defines (musl's pthread_attr_*), so
+// they would set that library's attributes, not this system's. The context
+// instead runs its entry on a stack of its own, mapped here, through
+// okm_call_on_stack; the stack the thread library gave it holds only the frames
+// of `run'. The stack's lowest page is made inaccessible, so running off the
+// end faults where it happens.
+constexpr okm_uptr kStack = 8u * 1024u * 1024u;
+
+#ifdef OKM_STANDALONE
+// Calls fn(arg) with the stack pointer at `top' and returns on the stack it was
+// called on. A frame record on the new stack links to the caller's, so a
+// backtrace from inside crosses back to the thread's own frames.
+extern "C" void okm_call_on_stack(void (*fn)(void*), void* arg, void* top);
+#if defined(__aarch64__)
+asm(".globl _okm_call_on_stack\n"
+    ".p2align 2\n"
+    "_okm_call_on_stack:\n"
+    "  stp x29, x30, [sp, #-16]!\n"   // the caller's frame, on its stack
+    "  mov x29, sp\n"
+    "  mov sp, x2\n"                  // the new stack, 16-byte aligned
+    "  stp x29, x30, [sp, #-16]!\n"   // a record linking back to it
+    "  mov x29, sp\n"
+    "  mov x8, x0\n"
+    "  mov x0, x1\n"
+    "  blr x8\n"
+    "  ldp x29, x30, [sp], #16\n"     // x29: the frame on the old stack
+    "  mov sp, x29\n"
+    "  ldp x29, x30, [sp], #16\n"
+    "  ret\n");
+#elif defined(__x86_64__)
+asm(".globl _okm_call_on_stack\n"
+    ".p2align 4\n"
+    "_okm_call_on_stack:\n"
+    "  pushq %rbp\n"                  // the caller's frame, on its stack
+    "  movq %rsp, %rbp\n"
+    "  movq %rdx, %rsp\n"             // the new stack, 16-byte aligned at the call
+    "  movq %rdi, %rax\n"
+    "  movq %rsi, %rdi\n"
+    "  callq *%rax\n"                 // the callee's saved %rbp links back
+    "  movq %rbp, %rsp\n"
+    "  popq %rbp\n"
+    "  retq\n");
+#else
+#error "okm_call_on_stack: no definition for this architecture"
+#endif
+#endif
 
 namespace {
 
@@ -65,6 +125,7 @@ struct context {
     void* arg;
 #ifdef OKM_STANDALONE
     volatile okm_u32 finished;
+    void* stack;
 #else
     unsigned long thread;
 #endif
@@ -72,13 +133,15 @@ struct context {
 
 void* run(void* p) {
     auto* c = static_cast<context*>(p);
-    c->entry(c->arg);
 #ifdef OKM_STANDALONE
+    okm_call_on_stack(c->entry, c->arg, static_cast<unsigned char*>(c->stack) + kStack);
     __atomic_store_n(&c->finished, 1u, __ATOMIC_RELEASE);
     okm::sys(okm::nr_ulock_wake,
              static_cast<okm_long>(okm::ul_compare_and_wait | okm::ulf_no_errno
                                  | okm::ulf_wake_all),
              reinterpret_cast<okm_long>(const_cast<okm_u32*>(&c->finished)), 0);
+#else
+    c->entry(c->arg);
 #endif
     return nullptr;
 }
@@ -105,11 +168,24 @@ int kal_task_start(void (*entry)(void*), void* arg, kal_task* out) {
     c->entry = entry; c->arg = arg;
 
 #ifdef OKM_STANDALONE
+    // A mapping of this size is a whole one of its own, so its first page is
+    // the stack's lowest. A refusal leaves the stack without its guard, not
+    // without its context.
+    c->stack = kal_alloc(kStack, 16);
+    if (c->stack == nullptr) { kal_free(c, sizeof(context), alignof(context)); return kal_err_no_memory; }
+    okm::sys(okm::nr_mprotect, reinterpret_cast<okm_long>(c->stack),
+             static_cast<okm_long>(kal_memory_granularity()), 0 /* PROT_NONE */);
     void* thread = nullptr;
     const int rc = pthread_create_from_mach_thread(&thread, nullptr, run, c);
+    if (rc != 0) kal_free(c->stack, kStack, 16);
 #else
+    // _opaque_pthread_attr_t: a long and 56 bytes, on both architectures.
+    alignas(16) unsigned char attr[64] = {};
+    pthread_attr_init(attr);
+    pthread_attr_setstacksize(attr, kStack);
     void* id = nullptr;
-    const int rc = ::pthread_create(&id, nullptr, run, c);
+    const int rc = ::pthread_create(&id, attr, run, c);
+    pthread_attr_destroy(attr);
     if (rc == 0) c->thread = static_cast<unsigned long>(reinterpret_cast<okm_uptr>(id));
 #endif
     if (rc != 0) { kal_free(c, sizeof(context), alignof(context)); return translate_posix(rc); }
@@ -129,6 +205,8 @@ int kal_task_join(kal_task h) {
                  static_cast<okm_long>(okm::ul_compare_and_wait | okm::ulf_no_errno),
                  reinterpret_cast<okm_long>(const_cast<okm_u32*>(&c->finished)), 0, 0);
     }
+    // The entry has returned from it: `run' is on the thread library's stack.
+    kal_free(c->stack, kStack, 16);
 #else
     const int rc = ::pthread_join(reinterpret_cast<void*>(
                                       static_cast<okm_uptr>(c->thread)), nullptr);
